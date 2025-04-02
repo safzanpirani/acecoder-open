@@ -1,6 +1,6 @@
 # AceCoder (Open-sourced)
 
-Inspired by [Interview Coder](https://github.com/ibttf/interview-coder) by @ibttf.z
+Inspired by [Interview Coder](https://github.com/ibttf/interview-coder) by @ibttf
 
 An app that does this shouldn't be locked behind a $60/mo paywall.
 
