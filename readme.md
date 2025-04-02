@@ -105,4 +105,4 @@ Under the GPLv3, you are free to use, modify, and distribute this software, prov
 
 ## Contributing
 
-Contributions are welcome! Please feel free to open issues for bugs or feature requests, or submit pull requests. (Consider adding a `CONTRIBUTING.md` file with more detailed guidelines).
+Contributions are welcome! Please feel free to open issues for bugs or feature requests, or submit pull requests.
