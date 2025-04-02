@@ -10,6 +10,10 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 
 **Note:** This application is currently designed specifically for **Windows**.
 
+<p align="center">
+  <img src="preview.webp" alt="AceCoder Preview" width="600">
+</p>
+
 ## Key Features
 
 *   **Screenshot Capture:** Capture one or more screenshots of coding problems or code snippets using a hotkey.
