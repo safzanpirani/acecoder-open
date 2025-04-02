@@ -1,0 +1,8 @@
+PySide6
+keyboard
+mss
+Pillow
+openai
+httpx
+markdown
+Pygments 
