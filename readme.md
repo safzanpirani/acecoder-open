@@ -26,8 +26,8 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 
 ## Planned Features
 
-*   **Click-through Overlay:** Allow mouse interactions with windows underneath the overlay.
-*   **Optional Follow-up Suppression:** Ability to type in follow-up window without losing focus of current window.
+- [ ] **Click-through Overlay:** Allow mouse interactions with windows underneath the overlay.
+- [ ] **Optional Follow-up Suppression:** Ability to type in follow-up window without losing focus of current window.
 
 ## Keybindings
 
