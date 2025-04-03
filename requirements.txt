@@ -1,8 +1,15 @@
-PySide6
-keyboard
-mss
-Pillow
-openai
-httpx
-markdown
-Pygments 
+# Common dependencies (required on all platforms)
+PySide6>=6.0.0,<7.0.0
+Pillow>=9.0.0,<11.0.0
+openai>=1.0.0,<2.0.0  # Added openai
+httpx>=0.20.0,<1.0.0   # Added httpx
+markdown>=3.0.0,<4.0.0
+Pygments>=2.0.0,<3.0.0
+
+# Windows specific dependencies
+keyboard>=0.13.5,<1.0.0 ; sys_platform == 'win32'
+mss>=6.0.0,<10.0.0 ; sys_platform == 'win32'
+
+# macOS specific dependencies
+pynput>=1.7.0,<2.0.0 ; sys_platform == 'darwin'
+pyobjc-framework-cocoa>=8.0,<11.0.0 ; sys_platform == 'darwin'

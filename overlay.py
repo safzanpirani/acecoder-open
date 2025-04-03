@@ -12,10 +12,31 @@ import sys
 import os
 from functools import lru_cache
 
+if sys.platform == 'darwin':
+    try:
+        from Cocoa import (NSApplication, NSWindow, NSApp, NSScreenSaverWindowLevel,
+                         NSStatusWindowLevel,
+                         NSPopUpMenuWindowLevel,
+                         NSWindowCollectionBehaviorCanJoinAllSpaces, 
+                         NSWindowCollectionBehaviorStationary, 
+                         NSWindowCollectionBehaviorIgnoresCycle,
+                         NSWindowCollectionBehaviorFullScreenAuxiliary,
+                         NSWindowSharingNone,
+                         NSWindowSharingReadOnly,
+                         NSFloatingWindowLevel)
+        import objc
+    except ImportError:
+        print("Error: PyObjC not installed. Please run: pip install pyobjc-framework-cocoa")
+        sys.exit(1)
+
+# Import objc bridge
+
+from typing import Optional
+
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Constants for styling
+# Constants for styling (yes, I know, slop.)
 PYGMENTS_STYLE = """
 <style>
     body { color: white; font-family: 'Segoe UI', Arial, sans-serif; }
@@ -131,7 +152,26 @@ if sys.platform == 'win32':
         logger.error(f"Could not import Windows-specific libraries: {e}")
         WINDOWS_APIS_LOADED = False
 else:
+    # Define WINDOWS_APIS_LOADED as False for non-Windows platforms
     WINDOWS_APIS_LOADED = False
+    # Optionally define dummy classes/constants if they are referenced elsewhere outside the main 'if' block
+    # This avoids NameErrors if other parts of the code try to access them unconditionally.
+    # Example (adjust based on actual usage):
+    # class WINDOWCOMPOSITIONATTRIBDATA: pass 
+    # WDA_EXCLUDEFROMCAPTURE = None
+    # etc...
+
+# Platform specific imports for macOS native features
+if sys.platform == 'darwin':
+    try:
+        # Import PyObjC utility to get NSWindow from QWindow ID
+        from PyObjCTools import AppHelper
+        MACOS_NATIVE_APIS_LOADED = True
+    except ImportError:
+        logging.error("PyObjC not found. Native macOS features disabled. Run: pip install pyobjc-framework-cocoa")
+        MACOS_NATIVE_APIS_LOADED = False
+else:
+    MACOS_NATIVE_APIS_LOADED = False
 
 # Signal helper for thread-safe UI updates
 class SignalHelper(QObject):
@@ -144,10 +184,14 @@ class OverlayWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         logger.debug("Initializing OverlayWindow")
-        self.setWindowTitle("Hyper-V Host Service")
+        self.setWindowTitle("WMI Provider Host")
 
-        # Basic window flags
-        base_flags = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+        # Basic window flags - Start with common flags
+        base_flags = Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        # Add Qt.Tool only on Windows to hide from taskbar
+        if sys.platform == 'win32':
+            base_flags |= Qt.Tool
+            
         self.setWindowFlags(base_flags)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
@@ -165,11 +209,14 @@ class OverlayWindow(QMainWindow):
         # Store exclusion status
         self._excluded_from_capture = True
 
-        # Apply Windows-specific capture exclusion after window is created
-        if sys.platform == 'win32' and WINDOWS_APIS_LOADED:
-            # Schedule this to run after window is created
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(100, self.exclude_from_capture)
+        # macOS specific state
+        if sys.platform == 'darwin':
+            self._macos_capture_excluded = True # Default to excluded
+
+        # Apply macOS Native Settings
+        if sys.platform == 'darwin' and MACOS_NATIVE_APIS_LOADED:
+            # Schedule this to run shortly after show() to ensure winId() is valid
+            QTimer.singleShot(50, self.apply_macos_native_settings)
 
         # Current markdown content
         self.current_markdown = ""
@@ -295,8 +342,80 @@ class OverlayWindow(QMainWindow):
         self.show()
         logger.debug("OverlayWindow initialized and shown")
 
+    def _get_native_nswindow(self) -> Optional['NSWindow']: # Use forward reference for typing
+        """Helper method to get the native NSWindow object (macOS only)."""
+        if not (sys.platform == 'darwin' and MACOS_NATIVE_APIS_LOADED):
+            return None
+            
+        try:
+            qwindow = self.windowHandle()
+            if not qwindow:
+                logger.error("Could not get QWindow handle for native window.")
+                return None
+
+            native_view_ptr = qwindow.winId()
+            if not native_view_ptr:
+                logger.error("Could not get native view pointer (winId) for native window.")
+                return None
+                
+            ns_view = objc.objc_object(c_void_p=native_view_ptr)
+            if not ns_view or not hasattr(ns_view, 'window'):
+                 logger.error(f"Failed to get valid NSView object ({ns_view}) for native window.")
+                 return None
+
+            ns_window = ns_view.window()
+            if not ns_window:
+                logger.error("Failed to get native NSWindow object from NSView.")
+                return None
+                
+            return ns_window
+        except Exception as e:
+            logger.error(f"Error getting native NSWindow: {e}", exc_info=True)
+            return None
+
+    def apply_macos_native_settings(self):
+        """Apply macOS specific window level, collection behavior, and initial sharing type."""
+        logger.debug("Applying macOS native window settings...")
+        ns_window = self._get_native_nswindow()
+        if not ns_window:
+            logger.error("Cannot apply native macOS settings: Failed to get NSWindow.")
+            return
+            
+        try:
+            logger.info(f"Applying settings to NSWindow: {ns_window}")
+
+            # 1. Set Window Level - Use standard Floating level
+            target_level = NSFloatingWindowLevel 
+            ns_window.setLevel_(target_level)
+            logger.debug(f"Set NSWindow level to {target_level} (NSFloatingWindowLevel)")
+
+            # 2. Set Collection Behavior - Further simplified for visibility testing
+            behavior = (
+                NSWindowCollectionBehaviorCanJoinAllSpaces |
+                NSWindowCollectionBehaviorFullScreenAuxiliary
+                # NSWindowCollectionBehaviorIgnoresCycle # Remove again for testing
+                # NSWindowCollectionBehaviorStationary | 
+            )
+            ns_window.setCollectionBehavior_(behavior)
+            logger.debug(f"Set NSWindow collection behavior to (simplified for visibility): {behavior}")
+
+            # 3. Set Initial Sharing Type based on state
+            initial_sharing_type = NSWindowSharingNone if self._macos_capture_excluded else NSWindowSharingReadOnly
+            ns_window.setSharingType_(initial_sharing_type)
+            logger.debug(f"Set initial NSWindow sharing type to {initial_sharing_type}")
+
+            logger.info("Successfully applied initial native macOS window settings.")
+
+        except Exception as e:
+            logger.error(f"Failed to apply macOS native settings: {e}", exc_info=True)
+
     def exclude_from_capture(self):
         """Apply Windows-specific methods to exclude window from capture but keep visible to user"""
+        if sys.platform == 'darwin':
+            # macOS exclusion is handled by apply_macos_native_settings setting sharing type
+            logger.debug("macOS capture exclusion handled by native settings (sharing type). Skipping explicit call.")
+            return
+            
         if not sys.platform == 'win32' or not WINDOWS_APIS_LOADED:
             logger.debug("Skipping Windows-specific capture exclusion")
             return
@@ -339,37 +458,56 @@ class OverlayWindow(QMainWindow):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(100, self.exclude_from_capture)
 
+    @Slot()
     def toggle_capture_visibility(self):
-        """Toggle whether the window appears in screenshots/recordings"""
-        if not sys.platform == 'win32' or not WINDOWS_APIS_LOADED:
-            self.update_status("Capture exclusion only available on Windows")
-            return
+        """Toggle whether the window appears in screenshots/recordings."""
+        if sys.platform == 'win32' and WINDOWS_APIS_LOADED:
+            logger.debug("Toggling Windows capture visibility...")
+            try:
+                hwnd = int(self.winId())
+                self._excluded_from_capture = not self._excluded_from_capture
+                SetWindowDisplayAffinity = windll.user32.SetWindowDisplayAffinity
+                new_affinity = WDA_EXCLUDEFROMCAPTURE if self._excluded_from_capture else 0
+                result = SetWindowDisplayAffinity(hwnd, new_affinity)
+                if result:
+                    status = "excluded from" if self._excluded_from_capture else "visible in"
+                    self.update_status(f"Window now {status} screen captures (Windows)")
+                    logger.info(f"Windows capture visibility set to: {status}")
+                else:
+                    error = windll.kernel32.GetLastError()
+                    self.update_status(f"Error changing capture visibility: {error}")
+                    logger.error(f"Failed to set Window Display Affinity: error {error}")
+            except Exception as e:
+                self.update_status(f"Error toggling capture visibility: {e}")
+                logger.error(f"Error toggling Windows capture visibility: {e}", exc_info=True)
+        
+        elif sys.platform == 'darwin' and MACOS_NATIVE_APIS_LOADED:
+            logger.debug("Toggling macOS capture visibility...")
+            ns_window = self._get_native_nswindow()
+            if not ns_window:
+                self.update_status("Error: Could not get native window to toggle visibility.")
+                return
 
-        try:
-            hwnd = int(self.winId())
-
-            # Toggle the state
-            self._excluded_from_capture = not self._excluded_from_capture
-
-            # Apply display affinity (most effective method)
-            SetWindowDisplayAffinity = windll.user32.SetWindowDisplayAffinity
-
-            # Apply or remove the capture exclusion
-            if self._excluded_from_capture:
-                result = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-            else:
-                # 0 = normal window behavior, visible in captures
-                result = SetWindowDisplayAffinity(hwnd, 0)
-
-            if result:
-                status = "excluded from" if self._excluded_from_capture else "visible in"
-                self.update_status(f"Window now {status} screen captures")
-            else:
-                error = windll.kernel32.GetLastError()
-                self.update_status(f"Error changing capture visibility: {error}")
-
-        except Exception as e:
-            self.update_status(f"Error toggling capture visibility: {e}")
+            try:
+                # Toggle the state
+                self._macos_capture_excluded = not self._macos_capture_excluded
+                
+                # Set the new sharing type
+                new_sharing_type = NSWindowSharingNone if self._macos_capture_excluded else NSWindowSharingReadOnly
+                ns_window.setSharingType_(new_sharing_type)
+                
+                # Update status
+                status = "excluded from" if self._macos_capture_excluded else "visible in"
+                self.update_status(f"Window now {status} screen captures (macOS)")
+                logger.info(f"macOS capture visibility set to: {status}")
+                
+            except Exception as e:
+                 self.update_status(f"Error toggling macOS capture visibility: {e}")
+                 logger.error(f"Error toggling macOS capture visibility: {e}", exc_info=True)
+            
+        else:
+             logger.debug(f"Toggle capture visibility hotkey pressed on unsupported platform: {sys.platform}")
+             self.update_status(f"Capture exclusion toggle not supported on this OS ({sys.platform}).")
 
     @Slot()
     def toggle_visibility(self):
@@ -841,6 +979,37 @@ class OverlayWindow(QMainWindow):
                 self.status.setStyleSheet("color: rgba(200, 200, 200, 200); font-style: italic; font-size: 11px;")
             except:
                 pass
+
+    @Slot()
+    def bring_to_front(self):
+        """Attempt to bring the overlay window to the front and make it visible."""
+        logger.info("Attempting to bring overlay window to front...")
+        try:
+            if not self.isVisible():
+                logger.debug("Window not visible, calling show().")
+                self.show()
+            else:
+                logger.debug("Window already visible.")
+            
+            # Raise the window within the application stack
+            logger.debug("Calling raise_().")
+            self.raise_()
+            
+            # Attempt to activate the window (may not steal focus, but helps)
+            logger.debug("Calling activateWindow().")
+            self.activateWindow()
+            
+            # Ensure it's not minimized (though unlikely for a frameless tool window)
+            if self.isMinimized():
+                logger.debug("Window minimized, setting Normal state.")
+                self.setWindowState(Qt.WindowActive)
+                
+            logger.info("bring_to_front actions completed.")
+            # Add a status update?
+            # self.update_status("Overlay brought to front.") 
+
+        except Exception as e:
+             logger.error(f"Error in bring_to_front: {e}", exc_info=True)
 
 # Create the CodeBlockExtension class for compatibility
 class CodeBlockExtension(markdown.extensions.Extension):

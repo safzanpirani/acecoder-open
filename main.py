@@ -2,13 +2,31 @@ import sys
 import signal
 import time
 import logging
-import keyboard
+# Conditionally import keyboard or pynput
+if sys.platform == 'win32':
+    try:
+        import keyboard
+    except ImportError:
+        print("Error: keyboard library not found. Please install it using:")
+        print("pip install keyboard")
+        sys.exit(1)
+elif sys.platform == 'darwin':
+    try:
+        from pynput import keyboard as pynput_keyboard
+    except ImportError:
+        print("Error: pynput library not found. Please install it using:")
+        print("pip install pynput")
+        sys.exit(1)
+else:
+    # Optionally handle other platforms or raise an error
+    print(f"Warning: Hotkey support not explicitly implemented for platform '{sys.platform}'.")
+    pynput_keyboard = None # Ensure the variable exists
+    keyboard = None
+
 from io import BytesIO
 from PIL import Image
-import mss
-import mss.tools
 import threading
-from functools import partial  # Added for partial function application
+from functools import partial
 import os
 from datetime import datetime
 from PySide6.QtWidgets import QApplication, QMessageBox
@@ -16,6 +34,27 @@ from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 
 from overlay import OverlayWindow
 from api_client import ApiClient  # Import our new ApiClient instead of BackendClient
+
+# Add necessary imports
+import subprocess
+import tempfile
+
+if sys.platform == 'win32':
+    try:
+        import mss
+        import mss.tools
+    except ImportError:
+        print("Error: mss not installed. Please run: pip install mss")
+        sys.exit(1)
+
+# Platform specific imports
+if sys.platform == 'darwin':
+
+    try:
+        from Cocoa import NSApplication, NSApp, NSApplicationActivationPolicyAccessory
+    except ImportError:
+        print("Error: PyObjC not installed. Please run: pip install pyobjc-framework-cocoa")
+        sys.exit(1)
 
 # --- High DPI Scaling --- (Set BEFORE QApplication import)
 # Enable High DPI scaling for better rendering on scaled displays
@@ -47,9 +86,9 @@ MOCK_MODE = False
 API_BASE_URL = "http://localhost:5000"
 
 # Constants for screenshot capture
-SCREENSHOT_DELAY_MS = 200  # Delay before taking screenshot in milliseconds
+SCREENSHOT_DELAY_MS = 300 # Increased delay slightly for macOS/screencapture
 MOVEMENT_STEP = 50  # Pixels to move the overlay window
-DELAY_SECONDS = 0.5 # Delay for screenshot to avoid capturing the overlay
+# DELAY_SECONDS = 0.5 # Delay for screenshot - replaced by SCREENSHOT_DELAY_MS
 
 class SignalHandler(QObject):
     def __init__(self, app):
@@ -60,7 +99,7 @@ class SignalHandler(QObject):
         logger.info(f"Signal {signum} received, shutting down...")
         self.app.quit()
 
-# Global hotkey handler that emits signals for Qt to process
+# Global hotkey handler using platform-specific library
 class HotkeyHandler(QObject):
     capture_signal = Signal()
     toggle_signal = Signal()
@@ -70,106 +109,278 @@ class HotkeyHandler(QObject):
     move_up_signal = Signal()
     move_down_signal = Signal()
     toggle_capture_visibility_signal = Signal()
-    reset_screenshots_signal = Signal()  # New signal for resetting screenshots
-    follow_up_signal = Signal()  # New signal for follow-up dialog
+    reset_screenshots_signal = Signal()
+    follow_up_signal = Signal()
+    focus_signal = Signal()
 
     def __init__(self):
         super().__init__()
-        
-        # Register hotkeys with suppress=True to prevent them from being passed to other applications
-        keyboard.add_hotkey('ctrl+shift+h', self.on_capture, suppress=True)
-        keyboard.add_hotkey('ctrl+shift+enter', self.on_process, suppress=True)
-        keyboard.add_hotkey('ctrl+b', self.on_toggle, suppress=True)
-        keyboard.add_hotkey('ctrl+alt+left', self.on_move_left, suppress=True)
-        keyboard.add_hotkey('ctrl+alt+right', self.on_move_right, suppress=True)
-        keyboard.add_hotkey('ctrl+alt+up', self.on_move_up, suppress=True)
-        keyboard.add_hotkey('ctrl+alt+down', self.on_move_down, suppress=True)
-        keyboard.add_hotkey('ctrl+shift+v', self.toggle_capture_visibility, suppress=True)
-        keyboard.add_hotkey('ctrl+shift+r', self.on_reset_screenshots, suppress=True)
-        keyboard.add_hotkey('ctrl+l', self.on_follow_up, suppress=True)  # New hotkey for follow-up
-        
-        logger.debug("Hotkeys registered with suppression enabled")
+        # pynput specific attributes, initialize only if needed
+        self.listener = None
+        self.listener_thread = None
 
+    def start_listener(self):
+        """Starts the appropriate hotkey listener based on the OS."""
+        if sys.platform == 'win32' and keyboard:
+            logger.debug("Registering hotkeys using 'keyboard' library (Windows)...")
+            # Register hotkeys using keyboard library
+            # Use suppress=True to prevent the key press from propagating
+            keyboard.add_hotkey('ctrl+shift+h', self.on_capture, suppress=True)
+            keyboard.add_hotkey('ctrl+shift+enter', self.on_process, suppress=True)
+            keyboard.add_hotkey('ctrl+b', self.on_toggle, suppress=True)
+            keyboard.add_hotkey('ctrl+alt+left', self.on_move_left, suppress=True)
+            keyboard.add_hotkey('ctrl+alt+right', self.on_move_right, suppress=True)
+            keyboard.add_hotkey('ctrl+alt+up', self.on_move_up, suppress=True)
+            keyboard.add_hotkey('ctrl+alt+down', self.on_move_down, suppress=True)
+            keyboard.add_hotkey('ctrl+shift+v', self.toggle_capture_visibility, suppress=True)
+            keyboard.add_hotkey('ctrl+shift+r', self.on_reset_screenshots, suppress=True)
+            keyboard.add_hotkey('ctrl+l', self.on_follow_up, suppress=True)
+            keyboard.add_hotkey('ctrl+shift+f', self.on_focus, suppress=True)
+            logger.info("'keyboard' hotkeys registered.")
+            # Note: 'keyboard' library doesn't require a separate listener thread typically.
+            # It hooks into the system event loop.
+
+        elif sys.platform == 'darwin' and pynput_keyboard:
+            logger.debug("Starting pynput hotkey listener (macOS)...")
+            # Define hotkeys map for pynput
+            hotkeys_map = {
+                '<ctrl>+<shift>+h': self.on_capture,
+                '<ctrl>+<shift>+<enter>': self.on_process,
+                '<ctrl>+b': self.on_toggle,
+                '<ctrl>+<alt>+<left>': self.on_move_left,
+                '<ctrl>+<alt>+<right>': self.on_move_right,
+                '<ctrl>+<alt>+<up>': self.on_move_up,
+                '<ctrl>+<alt>+<down>': self.on_move_down,
+                '<ctrl>+<shift>+v': self.toggle_capture_visibility,
+                '<ctrl>+<shift>+r': self.on_reset_screenshots,
+                '<ctrl>+l': self.on_follow_up,
+                '<ctrl>+<shift>+f': self.on_focus
+            }
+
+            # Run listener in a separate thread for pynput
+            def run_listener():
+                try:
+                    self.listener = pynput_keyboard.GlobalHotKeys(hotkeys_map)
+                    self.listener.start() # Use start() for non-blocking
+                    logger.info("pynput GlobalHotKeys listener started.")
+                    self.listener.join() # Block this thread until listener stops
+                    logger.info("pynput GlobalHotKeys listener stopped.")
+                except Exception as e:
+                    logger.error(f"Failed to start or run pynput listener: {e}", exc_info=True)
+
+            self.listener_thread = threading.Thread(target=run_listener, daemon=True)
+            self.listener_thread.start()
+
+        else:
+            logger.warning(f"Hotkey listener not started (unsupported platform '{sys.platform}' or library missing).")
+
+    def stop_listener(self):
+        """Stops the appropriate hotkey listener based on the OS."""
+        if sys.platform == 'win32' and keyboard:
+            logger.info("Unhooking all 'keyboard' hotkeys...")
+            try:
+                keyboard.unhook_all()
+                logger.info("'keyboard' hotkeys unhooked.")
+            except Exception as e:
+                 logger.error(f"Error unhooking 'keyboard' hotkeys: {e}", exc_info=True)
+
+        elif sys.platform == 'darwin' and pynput_keyboard:
+            if self.listener:
+                logger.info("Stopping pynput hotkey listener...")
+                try:
+                    self.listener.stop()
+                    if self.listener_thread and self.listener_thread.is_alive():
+                        self.listener_thread.join(timeout=1.0)
+                        if self.listener_thread.is_alive():
+                            logger.warning("pynput listener thread did not exit cleanly.")
+                except Exception as e:
+                    logger.error(f"Error stopping pynput listener: {e}", exc_info=True)
+                self.listener = None
+                self.listener_thread = None
+                logger.info("pynput listener stopped.")
+            else:
+                logger.debug("pynput listener was not running.")
+        else:
+             logger.debug("No active hotkey listener to stop for this platform.")
+
+    # --- Signal emitting methods ---
     def on_capture(self):
-        logger.debug("Capture hotkey pressed")
+        logger.debug("Capture hotkey pressed: <ctrl>+<shift>+h")
         self.capture_signal.emit()
 
     def on_toggle(self):
-        """Toggle overlay visibility"""
-        logger.debug("Toggle visibility hotkey pressed")
+        logger.debug("Toggle visibility hotkey pressed: <ctrl>+b")
         self.toggle_signal.emit()
 
     def on_process(self):
-        logger.debug("Process hotkey pressed")
+        logger.debug("Process hotkey pressed: <ctrl>+<shift>+<enter>")
         self.process_signal.emit()
 
     def on_move_left(self):
-        logger.debug("Move left hotkey pressed")
+        logger.debug("Move left hotkey pressed: <ctrl>+<alt>+<left>")
         self.move_left_signal.emit()
 
     def on_move_right(self):
-        logger.debug("Move right hotkey pressed")
+        logger.debug("Move right hotkey pressed: <ctrl>+<alt>+<right>")
         self.move_right_signal.emit()
 
     def on_move_up(self):
-        logger.debug("Move up hotkey pressed")
+        logger.debug("Move up hotkey pressed: <ctrl>+<alt>+<up>")
         self.move_up_signal.emit()
 
     def on_move_down(self):
-        logger.debug("Move down hotkey pressed")
+        logger.debug("Move down hotkey pressed: <ctrl>+<alt>+<down>")
         self.move_down_signal.emit()
 
     def toggle_capture_visibility(self):
-        logger.debug("Toggle capture visibility hotkey pressed")
+        logger.debug("Toggle capture visibility hotkey pressed: <ctrl>+<shift>+v")
         self.toggle_capture_visibility_signal.emit()
 
     def on_reset_screenshots(self):
-        """Reset screenshots"""
-        logger.debug("Reset screenshots hotkey pressed")
+        logger.debug("Reset screenshots hotkey pressed: <ctrl>+<shift>+r")
         self.reset_screenshots_signal.emit()
 
     def on_follow_up(self):
-        """Show follow-up dialog"""
-        logger.debug("Follow-up hotkey pressed")
+        logger.debug("Follow-up hotkey pressed: <ctrl>+l")
         self.follow_up_signal.emit()
+
+    def on_focus(self):
+        logger.debug("Focus overlay hotkey pressed: <ctrl>+<shift>+f")
+        self.focus_signal.emit()
 
 # Screenshot and navigation functions
 def take_screenshot(overlay):
-    logger.debug("Taking screenshot")
+    """Hides overlay and triggers delayed capture."""
+    logger.debug("Initiating screenshot capture")
     # Hide overlay first
     overlay.hide()
 
-    # Schedule the actual screenshot after a small delay to ensure overlay is hidden
+    # Schedule the actual screenshot after a delay to ensure overlay is hidden
     QTimer.singleShot(SCREENSHOT_DELAY_MS, partial(delayed_capture, overlay))
 
 def delayed_capture(overlay):
+    """Performs the actual screen capture using platform-specific methods."""
     logger.debug("Delayed capture executing")
+    image_bytes = None
     try:
-        # Take screenshot
-        with mss.mss() as sct:
-            monitor = sct.monitors[1]
-            screenshot = sct.grab(monitor)
+        if sys.platform == 'darwin':
+            # macOS implementation using screencapture utility
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                tmp_filename = tmp_file.name
+            logger.debug(f"Using temporary file for screenshot: {tmp_filename}")
 
-            # Convert to PIL Image
-            img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+            # Command: screencapture -x (no sound, no cursor) <filename>
+            command = ["screencapture", "-x", tmp_filename]
 
-            # Store screenshot
-            buffer = BytesIO()
-            img.save(buffer, format="WEBP", quality=70)  # Changed from JPEG to WebP with quality 70
-            image_bytes = buffer.getvalue()
+            try:
+                # Run the command
+                result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=10)
+                logger.debug(f"screencapture command executed successfully.")
+                # Optional: Check result.stderr for potential warnings, though usually empty on success
+                if result.stderr:
+                    logger.warning(f"screencapture stderr: {result.stderr.strip()}")
 
-            # Store in app global
-            QApplication.instance().screenshots.append(image_bytes)
+                # Read the captured image file using PIL
+                with Image.open(tmp_filename) as img:
+                    logger.debug(f"Screenshot opened from {tmp_filename} (mode: {img.mode}, size: {img.size})")
+                    # Convert to RGB if it has alpha (PNGs often do)
+                    if img.mode == 'RGBA':
+                        logger.debug("Converting image from RGBA to RGB")
+                        img = img.convert('RGB')
 
-            # Update status
-            overlay.update_status(f"Screenshot {len(QApplication.instance().screenshots)} captured. Press CTRL+SHIFT+ENTER to process.")
+                    # Save to BytesIO buffer as WEBP
+                    buffer = BytesIO()
+                    img.save(buffer, format="WEBP", quality=70)
+                    image_bytes = buffer.getvalue()
+                    logger.debug(f"Screenshot saved to buffer as WEBP (size: {len(image_bytes)} bytes)")
 
-            # Show overlay again
-            overlay.show()
+            except FileNotFoundError:
+                 logger.error("Error: 'screencapture' command not found. Ensure macOS is running and the command is in PATH.")
+                 overlay.update_status("Error: screencapture command not found.")
+                 return # Stop processing this screenshot attempt
+            except subprocess.CalledProcessError as e:
+                # Log error details from the failed command
+                logger.error(f"screencapture command failed with return code {e.returncode}")
+                if e.stdout:
+                    logger.error(f"stdout: {e.stdout.strip()}")
+                if e.stderr:
+                    logger.error(f"stderr: {e.stderr.strip()}")
+                overlay.update_status(f"Screenshot failed (screencapture error {e.returncode}).")
+                return # Stop processing this screenshot attempt
+            except subprocess.TimeoutExpired:
+                logger.error("screencapture command timed out after 10 seconds.")
+                overlay.update_status("Screenshot failed (timeout).")
+                return # Stop processing this screenshot attempt
+            except Exception as e:
+                 logger.error(f"Error processing screenshot file {tmp_filename}: {e}", exc_info=True)
+                 overlay.update_status(f"Error reading screenshot: {e}")
+                 return # Stop processing this screenshot attempt
+            finally:
+                # Clean up the temporary file regardless of success/failure reading it
+                if os.path.exists(tmp_filename):
+                    try:
+                        os.remove(tmp_filename)
+                        logger.debug(f"Removed temporary file: {tmp_filename}")
+                    except OSError as e:
+                        logger.warning(f"Could not remove temporary screenshot file {tmp_filename}: {e}")
+
+        elif sys.platform == 'win32':
+            logger.debug("Delayed capture executing")
+            try:
+                # Take screenshot
+                with mss.mss() as sct:
+                    monitor = sct.monitors[1]
+                    screenshot = sct.grab(monitor)
+
+                    # Convert to PIL Image
+                    img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
+
+                    # Store screenshot
+                    buffer = BytesIO()
+                    img.save(buffer, format="WEBP", quality=70)  # Changed from JPEG to WebP with quality 70
+                    image_bytes = buffer.getvalue()
+
+                    # Store in app global
+                    #QApplication.instance().screenshots.append(image_bytes)
+
+                    # Update status
+                    overlay.update_status(f"Screenshot {len(QApplication.instance().screenshots)} captured. Press CTRL+SHIFT+ENTER to process.")
+
+                    # Show overlay again
+                    overlay.show()
+            except Exception as e:
+                logger.error(f"Screenshot error: {e}")
+                overlay.update_status(f"Screenshot error: {e}")
+                overlay.show()
+
+        else:
+             logger.warning(f"Screenshot functionality not supported on platform: {sys.platform}")
+             overlay.update_status(f"Screenshot not supported on this OS ({sys.platform}).")
+             return # Stop processing
+
+        # If we got image_bytes, store it
+        if image_bytes:
+            app_instance = QApplication.instance()
+            if not hasattr(app_instance, 'screenshots'):
+                app_instance.screenshots = [] # Initialize if somehow missing
+            app_instance.screenshots.append(image_bytes)
+            screenshot_count = len(app_instance.screenshots)
+            overlay.update_status(f"Screenshot {screenshot_count} captured. Press CTRL+SHIFT+ENTER to process.")
+            logger.info(f"Screenshot {screenshot_count} captured and stored.")
+        else:
+            # This case should ideally be covered by the returns above, but as a fallback:
+            logger.warning("Screenshot capture resulted in no image data.")
+            overlay.update_status("Screenshot capture failed to produce image.")
+
     except Exception as e:
-        logger.error(f"Screenshot error: {e}")
+        # General error catching for the whole function
+        logger.error(f"Unexpected error during delayed_capture: {e}", exc_info=True)
         overlay.update_status(f"Screenshot error: {e}")
-        overlay.show()  # Ensure overlay is shown even on error
+    finally:
+        # Ensure overlay is shown again, even if errors occurred
+        if not overlay.isVisible():
+             logger.debug("Showing overlay after capture attempt.")
+             overlay.show()
 
 def process_screenshots(overlay):
     logger.debug("Processing screenshots")
@@ -337,8 +548,32 @@ def show_follow_up_dialog(overlay):
     overlay.show_follow_up_input()
 
 def main():
+    # --- macOS Specific Setup ---
+    # Moved policy setting to after QApplication init
+    # if sys.platform == 'darwin':
+    #     # Hide Dock icon by setting activation policy BEFORE QApplication init
+    #     try:
+    #         logger.debug("Setting macOS Activation Policy to Accessory")
+    #         app_instance = NSApplication.sharedApplication()
+    #         app_instance.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+    #         logger.debug("macOS Activation Policy set.")
+    #     except Exception as e:
+    #         logger.error(f"Failed to set macOS Activation Policy: {e}")
+    # ---------------------------
+
     # Create Qt application
     app = QApplication(sys.argv)
+
+    # --- macOS Specific Setup (Attempt 2: After QApplication) ---
+    if sys.platform == 'darwin' and 'NSApplication' in globals(): # Check if import succeeded
+        try:
+            logger.debug("Attempting to set macOS Activation Policy to Accessory (after QApplication init)")
+            # NSApp should be available now
+            NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+            logger.info("macOS Activation Policy set to Accessory.")
+        except Exception as e:
+            logger.error(f"Failed to set macOS Activation Policy (after QApplication init): {e}", exc_info=True)
+    # ---------------------------------------------------------
 
     # Set up signal handling
     signal_handler = SignalHandler(app)
@@ -359,8 +594,9 @@ def main():
     # Create screenshots list
     app.screenshots = []
 
-    # Create hotkey handler
+    # Create and start hotkey handler
     hotkey_handler = HotkeyHandler()
+    hotkey_handler.start_listener() # Start the listener thread
 
     # Connect signals to slots
     hotkey_handler.capture_signal.connect(lambda: take_screenshot(overlay))
@@ -373,6 +609,7 @@ def main():
     hotkey_handler.toggle_capture_visibility_signal.connect(overlay.toggle_capture_visibility)
     hotkey_handler.reset_screenshots_signal.connect(lambda: reset_screenshots(overlay))
     hotkey_handler.follow_up_signal.connect(lambda: show_follow_up_dialog(overlay))
+    hotkey_handler.focus_signal.connect(overlay.bring_to_front)
 
     # Initialize UI
     overlay.update_status("Ready. Press CTRL+SHIFT+H to capture screen.")
@@ -394,7 +631,7 @@ The assistant will analyze the problem and provide a solution. If you have quest
     # Create a cleanup handler
     def cleanup():
         logger.info("Cleaning up before exit...")
-        keyboard.unhook_all()  # Remove all keyboard hooks
+        hotkey_handler.stop_listener() # Stop the appropriate listener
 
     app.aboutToQuit.connect(cleanup)
 
@@ -402,10 +639,9 @@ The assistant will analyze the problem and provide a solution. If you have quest
 
 if __name__ == "__main__":
     try:
+        # Platform-specific library check is now done at the top-level import
+        # No need for checks here anymore
+
         sys.exit(main())
     except KeyboardInterrupt:
         logger.info("Application terminated by keyboard interrupt")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        sys.exit(1)
