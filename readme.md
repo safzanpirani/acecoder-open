@@ -70,6 +70,8 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
     ```
     *(This will automatically install the correct dependencies for your operating system)*
 
+4.  **(Optional) Install Recommended Font:** For the best visual experience, it is recommended to install the [JetBrains Mono](https://www.jetbrains.com/lp/mono/) font, which is used by default in the overlay.
+
 ## Configuration
 
 AceCoder requires an API key from **OpenRouter.ai** to function. OpenRouter provides access to various AI models, including free ones (rate limits apply).
