@@ -12,6 +12,9 @@ import sys
 import os
 from functools import lru_cache
 
+# Local configuration import
+import config
+
 if sys.platform == 'darwin':
     try:
         from Cocoa import (NSApplication, NSWindow, NSApp, NSScreenSaverWindowLevel,
@@ -251,6 +254,13 @@ class OverlayWindow(QMainWindow):
         self.shortcuts.setStyleSheet("color: #aaaaaa; font-size: 10px;")
         self.shortcuts.setAlignment(Qt.AlignCenter)
         self.shortcuts.setWordWrap(True)
+
+        # Update shortcuts label from config
+        self.shortcuts.setText(
+            f"shortcuts: {config.HOTKEY_CAPTURE}=Capture, {config.HOTKEY_PROCESS}=Process, {config.HOTKEY_PROCESS_FAST}=Fast Process, "
+            f"{config.HOTKEY_MOVE_LEFT}/{config.HOTKEY_MOVE_RIGHT}/...=Move, {config.HOTKEY_TOGGLE_VISIBILITY}=Toggle, "
+            f"{config.HOTKEY_RESET_SCREENSHOTS}=Reset, {config.HOTKEY_FOLLOW_UP}=Follow-up"
+        )
 
         # Output area for code and explanations
         self.output_area = QTextEdit()
@@ -935,12 +945,17 @@ class OverlayWindow(QMainWindow):
     def _update_output_text(self, content):
         """This method is safely called in the UI thread via signal"""
         try:
+            # Check scroll position *before* updating content
+            scroll_bar = self.output_area.verticalScrollBar()
+            was_at_bottom = scroll_bar.value() >= (scroll_bar.maximum() - 10) # Check if near bottom (within 10px)
+
+            # Update the content
             html_content = self.markdown_to_html(content)
             self.output_area.setHtml(html_content)
-            # Auto-scroll to bottom
-            self.output_area.verticalScrollBar().setValue(
-                self.output_area.verticalScrollBar().maximum()
-            )
+
+            # Auto-scroll only if user was already near the bottom
+            if was_at_bottom:
+                scroll_bar.setValue(scroll_bar.maximum()) # Scroll to the new bottom
         except Exception as e:
             logger.error(f"Error updating output: {e}")
             self.output_area.setPlainText(f"Error formatting output: {e}\n\n{content}")
@@ -949,13 +964,20 @@ class OverlayWindow(QMainWindow):
     def _append_output_text(self, content):
         """This method is safely called in the UI thread via signal"""
         try:
+            # Get current markdown, append new content
+            self.current_markdown += content 
+
+            # Check scroll position *before* updating content
+            scroll_bar = self.output_area.verticalScrollBar()
+            was_at_bottom = scroll_bar.value() >= (scroll_bar.maximum() - 10) # Check if near bottom (within 10px)
+
             # Re-render the entire content for proper markdown formatting
             html_content = self.markdown_to_html(self.current_markdown)
             self.output_area.setHtml(html_content)
-            # Auto-scroll to bottom
-            self.output_area.verticalScrollBar().setValue(
-                self.output_area.verticalScrollBar().maximum()
-            )
+
+            # Auto-scroll only if user was already near the bottom
+            if was_at_bottom:
+                scroll_bar.setValue(scroll_bar.maximum()) # Scroll to the new bottom
         except Exception as e:
             logger.error(f"Error appending output: {e}")
             # Fall back to plain text append

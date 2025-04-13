@@ -31,13 +31,15 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 
 ## Keybindings
 
-*   **`Ctrl + Shift + H`**: Capture a screenshot. Press multiple times to capture multiple images for a single analysis.
-*   **`Ctrl + Shift + Enter`**: Process the captured screenshot(s) and send for AI analysis.
-*   **`Ctrl + B`**: Toggle the visibility of the overlay window.
-*   **`Ctrl + Alt + Arrow Keys` (Left/Right/Up/Down)**: Move the overlay window around the screen.
-*   **`Ctrl + Shift + V`**: Toggle whether the overlay window itself appears in screen captures. 
-*   **`Ctrl + Shift + R`**: Reset (clear) the currently captured screenshots.
-*   **`Ctrl + L`**: Open the follow-up input area at the bottom of the overlay (only works after an initial analysis).
+*   **`Ctrl + Shift + H`** (Configurable: `HOTKEY_CAPTURE`): Capture a screenshot. Press multiple times to capture multiple images for a single analysis.
+*   **`Ctrl + Shift + Enter`** (Configurable: `HOTKEY_PROCESS`): Process the captured screenshot(s) and send for AI analysis (standard mode).
+*   **`Alt + Shift + Enter`** (Configurable: `HOTKEY_PROCESS_FAST`): Process the captured screenshot(s) using the faster model and skipping content detection (fast mode).
+*   **`Ctrl + B`** (Configurable: `HOTKEY_TOGGLE_VISIBILITY`): Toggle the visibility of the overlay window.
+*   **`Ctrl + Alt + Arrow Keys` (Left/Right/Up/Down)** (Configurable: `HOTKEY_MOVE_LEFT`, etc.): Move the overlay window around the screen.
+*   **`Ctrl + Shift + V`** (Configurable: `HOTKEY_TOGGLE_CAPTURE_VISIBILITY`): Toggle whether the overlay window itself appears in screen captures.
+*   **`Ctrl + Shift + R`** (Configurable: `HOTKEY_RESET_SCREENSHOTS`): Reset (clear) the currently captured screenshots.
+*   **`Ctrl + L`** (Configurable: `HOTKEY_FOLLOW_UP`): Open the follow-up input area at the bottom of the overlay (only works after an initial analysis).
+*   **`Ctrl + Shift + F`** (Configurable: `HOTKEY_FOCUS_OVERLAY`): Attempt to bring the overlay window to the front.
 
 ## Installation
 
@@ -74,10 +76,10 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 
 ## Configuration
 
-AceCoder requires an API key from **OpenRouter.ai** to function. OpenRouter provides access to various AI models, including free ones (rate limits apply).
+AceCoder uses a `config.py` file to manage settings and requires an API key from **OpenRouter.ai** to function. OpenRouter provides access to various AI models, including free ones (rate limits apply).
 
 1.  **Get an OpenRouter API Key:** Sign up at [https://openrouter.ai/](https://openrouter.ai/) and generate an API key.
-2.  **Set the Environment Variable:** You **must** set the `OPENROUTER_API_KEY` environment variable before running the application.
+2.  **Set the Environment Variable:** You **must** set the `OPENROUTER_API_KEY` environment variable before running the application. *Alternatively, you can hardcode the key directly in `config.py`, but this is **not recommended** for security reasons.*
 
     *   **Windows (Command Prompt - Temporary):**
         ```cmd
@@ -99,32 +101,30 @@ AceCoder requires an API key from **OpenRouter.ai** to function. OpenRouter prov
 
     **Important:** Keep your API key secure and do not commit it directly into the code or share it publicly.
 
-3.  **(Optional) Configure OpenRouter Referrer/Title:** You can optionally set `OPENROUTER_REFERRER_URL` and `OPENROUTER_SITE_TITLE` environment variables if you want to identify traffic from your app in OpenRouter analytics (use the same methods as above to set them).
+3.  **(Optional) Configure OpenRouter Referrer/Title:** You can optionally set `OPENROUTER_REFERRER_URL` and `OPENROUTER_SITE_TITLE` environment variables if you want to identify traffic from your app in OpenRouter analytics (use the same methods as above to set them, or modify `config.py`).
+
+4.  **Review `config.py`:** Open the `config.py` file in the project root. Here you can adjust:
+    *   **AI Models:** Change `DEFAULT_MODEL_NAME`, `DETECTION_MODEL_NAME`, and `FAST_MODEL_NAME` to use different models available on OpenRouter.
+    *   **Fast Mode Content Type:** Set `FAST_MODE_DEFAULT_CONTENT_TYPE` to the expected content type when skipping detection.
+    *   **API Parameters:** Modify `DEFAULT_TEMPERATURE`, `DEFAULT_MAX_TOKENS`, `DEFAULT_RETRY_COUNT`, `DEFAULT_TIMEOUT`.
+    *   **Application Settings:** Adjust `MAX_LOG_SIZE_MB`, `SCREENSHOT_DELAY_MS`, `OVERLAY_MOVEMENT_STEP`.
+    *   **Hotkeys:** Change the key combinations for various actions (`HOTKEY_CAPTURE`, `HOTKEY_PROCESS_FAST`, etc.). *Note: Be mindful of potential key conflicts and platform differences (e.g., 'enter' vs '<enter>').*
+    *   **Mock Mode:** Set `MOCK_MODE = True` for UI testing without API calls.
 
 ### Changing the AI Model
 
 AceCoder uses OpenRouter, giving you access to a variety of AI models. To change the model used for analysis:
 
-1.  Open the `api_client.py` file.
-2.  Locate the `__init__` method within the `ApiClient` class.
-3.  Find the line `self.model_name = "google/gemini-2.0-flash-thinking-exp:free"` (or similar).
-4.  Replace the model string (e.g., `"google/gemini-2.0-flash-thinking-exp:free"`) with the desired model identifier from [OpenRouter Models](https://openrouter.ai/models). Ensure you choose a model compatible with multimodal inputs (image and text).
-5.  You might also want to adjust `self.max_tokens` depending on the chosen model's limits.
+1.  Open the `config.py` file.
+2.  Locate the model settings (`DEFAULT_MODEL_NAME`, `DETECTION_MODEL_NAME`, `FAST_MODEL_NAME`).
+3.  Replace the model string (e.g., `"google/gemini-flash-1.5"`) with the desired model identifier from [OpenRouter Models](https://openrouter.ai/models). Ensure you choose a model compatible with multimodal inputs (image and text).
+4.  You might also want to adjust `DEFAULT_MAX_TOKENS` depending on the chosen model's limits.
 
 ## Usage
 
-1.  Ensure the `OPENROUTER_API_KEY` environment variable is set (see Configuration).
+1.  Ensure the `OPENROUTER_API_KEY` environment variable is set or configured in `config.py` (see Configuration).
 2.  Activate your virtual environment (see Installation).
-3.  Run the main script from the project directory:
-    *   **Windows:**
-        ```bash
-        python main.py
-        ```
-    *   **macOS / Linux:**
-        ```bash
-        python3 main.py
-        ```
-4.  Use the hotkeys (listed above) to capture screenshots and trigger analysis. The overlay window will appear and update with status messages and results.
+3.  Review and adjust settings in `config.py` if desired.
 
 ## License
 

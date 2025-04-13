@@ -14,6 +14,9 @@ from PIL import Image
 from PySide6.QtCore import QObject, Signal
 import os
 
+# Local configuration import
+import config
+
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -27,23 +30,22 @@ class ApiClient(QObject):
     # Static class variables to persist data between instances
     _last_problem_data = None
     _last_solution_content = None
+    _last_raw_text = None # Added to persist raw text for potential future use
     
     def __init__(self):
-        """Initialize the API client"""
+        """Initialize the API client using settings from config.py"""
         super().__init__()
         self.start_time = time.time()
-        self.openrouter_api_key = os.environ.get("OPENROUTER_API_KEY")
+        self.openrouter_api_key = config.OPENROUTER_API_KEY
         
         # Initialize OpenAI client for OpenRouter
         if not self.openrouter_api_key:
-            logger.error("OPENROUTER_API_KEY environment variable not set.")
+            logger.error("OPENROUTER_API_KEY not found in config or environment.")
             self.status_update_signal.emit("Error: OPENROUTER_API_KEY not set.")
-            # Optionally raise an error or handle this case appropriately
-            self.client = None 
+            self.client = None
         else:
             # Explicitly create an httpx client instance.
-            # This respects environment variables like HTTP_PROXY/HTTPS_PROXY by default.
-            http_client_instance = httpx.Client()
+            http_client_instance = httpx.Client(timeout=config.DEFAULT_TIMEOUT) # Use timeout from config
 
             self.client = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
@@ -52,35 +54,33 @@ class ApiClient(QObject):
             )
             # Optional OpenRouter headers for tracking/ranking
             self.openrouter_headers = {
-                "HTTP-Referer": os.environ.get("OPENROUTER_REFERRER_URL", "acecoder.dev"), # Set env var OPENROUTER_REFERRER_URL
-                "X-Title": os.environ.get("OPENROUTER_SITE_TITLE", "AceCoder"), # Set env var OPENROUTER_SITE_TITLE
+                "HTTP-Referer": config.OPENROUTER_REFERRER_URL,
+                "X-Title": config.OPENROUTER_SITE_TITLE,
             }
             logger.info("OpenAI client initialized for OpenRouter.")
         
-        # Model configuration (using OpenRouter model names)
-        self.model_name = "google/gemini-2.0-flash-thinking-exp:free" # Main model
-        self.detection_model_name = "google/gemini-2.0-flash-lite-001" # Model for content detection
-        self.temperature = 0.3  # Lower temperature for more deterministic outputs (lower preferred for coding questions)
-        self.max_tokens = 8192   # Max tokens for OpenRouter (adjust as needed per model)
+        # Model configuration (from config.py)
+        self.model_name = config.DEFAULT_MODEL_NAME
+        self.detection_model_name = config.DETECTION_MODEL_NAME
+        self.fast_model_name = config.FAST_MODEL_NAME # Added fast model name
+        self.temperature = config.DEFAULT_TEMPERATURE
+        self.max_tokens = config.DEFAULT_MAX_TOKENS
         
-        # API request settings
-        self.retry_count = 2    # Number of retries for failed API calls
-        self.timeout = 120      # Timeout in seconds for API requests
+        # API request settings (from config.py)
+        self.retry_count = config.DEFAULT_RETRY_COUNT
+        # Timeout is now set in the httpx client above
         
         # State tracking
         self.last_solution_content = ApiClient._last_solution_content
         self.current_output_content = None
-        self.last_raw_text = None
+        self.last_raw_text = ApiClient._last_raw_text
         
-        # Log management
-        self.max_log_size_mb = 50
-        
-        # No separate API configuration needed for OpenAI SDK
-        # self.configure_api()
+        # Log management (from config.py)
+        self.max_log_size_mb = config.MAX_LOG_SIZE_MB
         
         self.prune_log_files()
         
-        logger.info("API client initialized for OpenRouter")
+        logger.info("API client initialized using config.py settings")
     
     def prune_log_files(self):
         """Prune log files to prevent them from growing too large"""
@@ -105,19 +105,26 @@ class ApiClient(QObject):
         if temperature is not None:
             self.temperature = float(temperature)
             logger.info(f"Model temperature set to: {self.temperature}")
+        else:
+            self.temperature = config.DEFAULT_TEMPERATURE # Fallback to config default
         
         if max_tokens is not None:
             # Ensure max_tokens are within reasonable limits for the chosen model
             self.max_tokens = int(max_tokens)
             logger.info(f"Model max tokens set to: {self.max_tokens}")
+        else:
+            self.max_tokens = config.DEFAULT_MAX_TOKENS # Fallback to config default
             
-    def process_images(self, image_data_list):
+    def process_images(self, image_data_list, fast_mode=False):
         """
         Process images using OpenAI SDK via OpenRouter
         
         Args:
             image_data_list: List of image data in bytes
+            fast_mode: If True, skip content detection and use the fast model.
         """
+        logger.debug(f"[ApiClient.process_images] Received call with fast_mode={fast_mode}")
+
         if not self.client:
             logger.error("OpenAI client not initialized. Cannot process images.")
             self.status_update_signal.emit("Error: API Client not initialized.")
@@ -132,15 +139,18 @@ class ApiClient(QObject):
             for img in image_data_list
         ]
         
+        logger.debug(f"[ApiClient.process_images] Starting thread _process_images_thread with fast_mode={fast_mode}")
         processing_thread = threading.Thread(
             target=self._process_images_thread,
-            args=(encoded_images,),
+            args=(encoded_images, fast_mode), # Pass fast_mode to the thread
             daemon=True
         )
         processing_thread.start()
     
-    def _process_images_thread(self, encoded_images):
+    def _process_images_thread(self, encoded_images, fast_mode=False):
         """Thread function to process images via OpenRouter"""
+        logger.debug(f"[ApiClient._process_images_thread] Thread started with fast_mode={fast_mode}")
+
         if not self.client:
             logger.error("OpenAI client not initialized. Cannot process images.")
             return
@@ -149,12 +159,19 @@ class ApiClient(QObject):
             total_images = len(encoded_images)
             self.status_update_signal.emit(f"Processing {total_images} image(s)...")
             
-            content_type = self._detect_content_type(encoded_images)
-            self.status_update_signal.emit(f"Detected content type: {content_type}")
-            logger.info(f"Using prompt type: {content_type} for analysis")
+            current_model = self.model_name # Default model
+            if fast_mode:
+                content_type = config.FAST_MODE_DEFAULT_CONTENT_TYPE
+                current_model = self.fast_model_name
+                self.status_update_signal.emit(f"Fast Mode: Using {current_model} with assumed type '{content_type}'")
+                logger.info(f"Fast Mode enabled. Skipping detection, using model: {current_model}, type: {content_type}")
+            else:
+                content_type = self._detect_content_type(encoded_images)
+                self.status_update_signal.emit(f"Detected content type: {content_type}")
+                logger.info(f"Using prompt type: {content_type} for analysis")
             
             prompt = self._create_smart_prompt(total_images, content_type)
-            self.status_update_signal.emit(f"Analyzing {content_type} problem with {self.model_name}...")
+            self.status_update_signal.emit(f"Analyzing {content_type} problem with {current_model}...")
 
             # Prepare messages for OpenAI SDK multimodal format
             messages = [
@@ -176,7 +193,7 @@ class ApiClient(QObject):
 
             prompt_preview = prompt[:100] + "..." if len(prompt) > 100 else prompt
             logger.debug(f"Using prompt (preview): {prompt_preview}")
-            logger.debug(f"Sending request to OpenRouter model: {self.model_name}")
+            logger.debug(f"Sending request to OpenRouter model: {current_model}")
 
             try:
                 # Decide whether to stream based on a flag or setting (using stream=False for now)
@@ -184,7 +201,7 @@ class ApiClient(QObject):
                 
                 if should_stream:
                     stream = self.client.chat.completions.create(
-                        model=self.model_name,
+                        model=current_model, # Use the selected model
                         messages=messages,
                         temperature=self.temperature,
                         max_tokens=self.max_tokens,
@@ -216,11 +233,10 @@ class ApiClient(QObject):
                     
                 else: # Handle non-streaming response
                     response = self.client.chat.completions.create(
-                        model=self.model_name,
+                        model=current_model, # Use the selected model
                         messages=messages,
                         temperature=self.temperature,
                         max_tokens=self.max_tokens,
-                        top_p=0.95,
                         stream=False,
                         extra_headers=self.openrouter_headers
                     )
@@ -256,7 +272,7 @@ class ApiClient(QObject):
             self.status_update_signal.emit(f"Error processing images: {str(e)}")
     
     def _detect_content_type(self, encoded_images):
-        """Detect content type using OpenAI SDK via OpenRouter (using flash model)"""
+        """Detect content type using OpenAI SDK via OpenRouter (using detection model from config)"""
         if not self.client:
             logger.error("OpenAI client not initialized. Cannot detect content type.")
             return "general" # Default if client isn't ready
@@ -267,7 +283,7 @@ class ApiClient(QObject):
                 logger.warning("No images provided for content detection")
                 return "coding"
             
-            self.status_update_signal.emit("Running content detection...")
+            self.status_update_signal.emit(f"Running content detection with {self.detection_model_name}...") # Show model used
             detection_prompt = """ONLY respond with one of these exact words based on what you see in the image:
 - "coding" - if this shows a coding/programming problem or code snippet
 - "multiple_choice" - if this shows a multiple choice question or quiz (including history, science, etc.)
@@ -295,7 +311,7 @@ Example: If you see multiple choice history questions, respond with ONLY: multip
 
             logger.debug(f"Sending detection request to OpenRouter model: {self.detection_model_name}")
             detection_response = self.client.chat.completions.create(
-                model=self.detection_model_name, # Use the faster flash model
+                model=self.detection_model_name, # Use the detection model from config
                 messages=messages,
                 temperature=0.1,
                 max_tokens=10,
@@ -342,13 +358,13 @@ Example: If you see multiple choice history questions, respond with ONLY: multip
             return "general"
             
     def _secondary_content_detection(self, encoded_image):
-        """Fallback content detection using OpenAI SDK via OpenRouter"""
+        """Fallback content detection using OpenAI SDK via OpenRouter (using detection model from config)"""
         if not self.client:
             logger.error("OpenAI client not initialized. Cannot run secondary detection.")
             return "general"
 
         try:
-            self.status_update_signal.emit("Running secondary content detection...")
+            self.status_update_signal.emit(f"Running secondary content detection with {self.detection_model_name}...") # Show model used
             logger.info("Using secondary content detection method")
             
             detection_prompt = """Analyze what's shown in this image and answer the following yes/no questions:
@@ -379,10 +395,10 @@ Format your response exactly like this example:
 
             logger.debug(f"Sending secondary detection request to OpenRouter model: {self.detection_model_name}")
             detection_response = self.client.chat.completions.create(
-                model=self.detection_model_name, # Use flash model
+                model=self.detection_model_name, # Use detection model from config
                 messages=messages,
                 temperature=0.1,
-                max_output_tokens=50,
+                max_tokens=50, # Adjusted max_tokens for secondary detection
                 top_p=0.95,
                 stream=False,
                 extra_headers=self.openrouter_headers
@@ -564,9 +580,9 @@ UNIVERSAL GUIDELINES:
             ]
 
             try:
-                logger.debug(f"Sending follow-up request to OpenRouter model: {self.model_name}")
+                logger.debug(f"Sending follow-up request to OpenRouter model: {self.model_name}") # Use default model for follow-up
                 stream = self.client.chat.completions.create(
-                    model=self.model_name,
+                    model=self.model_name, # Follow-ups use the standard model
                     messages=messages,
                     temperature=self.temperature,
                     max_tokens=self.max_tokens,

@@ -34,6 +34,7 @@ from PySide6.QtCore import QTimer, QObject, Signal, Slot, Qt
 
 from overlay import OverlayWindow
 from api_client import ApiClient  # Import our new ApiClient instead of BackendClient
+import config # Import the configuration file
 
 # Add necessary imports
 import subprocess
@@ -80,14 +81,14 @@ logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('websocket').setLevel(logging.WARNING)
 
 # Change to True to test without the backend
-MOCK_MODE = False
+MOCK_MODE = config.MOCK_MODE # Use config value
 
 # API configuration
-API_BASE_URL = "http://localhost:5000"
+# API_BASE_URL = "http://localhost:5000" # No longer needed, handled in ApiClient
 
 # Constants for screenshot capture
-SCREENSHOT_DELAY_MS = 300 # Increased delay slightly for macOS/screencapture
-MOVEMENT_STEP = 50  # Pixels to move the overlay window
+SCREENSHOT_DELAY_MS = config.SCREENSHOT_DELAY_MS # Use config value
+MOVEMENT_STEP = config.OVERLAY_MOVEMENT_STEP  # Use config value
 # DELAY_SECONDS = 0.5 # Delay for screenshot - replaced by SCREENSHOT_DELAY_MS
 
 class SignalHandler(QObject):
@@ -104,6 +105,7 @@ class HotkeyHandler(QObject):
     capture_signal = Signal()
     toggle_signal = Signal()
     process_signal = Signal()
+    process_fast_signal = Signal() # New signal for fast processing
     move_left_signal = Signal()
     move_right_signal = Signal()
     move_up_signal = Signal()
@@ -123,38 +125,49 @@ class HotkeyHandler(QObject):
         """Starts the appropriate hotkey listener based on the OS."""
         if sys.platform == 'win32' and keyboard:
             logger.debug("Registering hotkeys using 'keyboard' library (Windows)...")
-            # Register hotkeys using keyboard library
+            # Register hotkeys using keyboard library and config values
             # Use suppress=True to prevent the key press from propagating
-            keyboard.add_hotkey('ctrl+shift+h', self.on_capture, suppress=True)
-            keyboard.add_hotkey('ctrl+shift+enter', self.on_process, suppress=True)
-            keyboard.add_hotkey('ctrl+b', self.on_toggle, suppress=True)
-            keyboard.add_hotkey('ctrl+alt+left', self.on_move_left, suppress=True)
-            keyboard.add_hotkey('ctrl+alt+right', self.on_move_right, suppress=True)
-            keyboard.add_hotkey('ctrl+alt+up', self.on_move_up, suppress=True)
-            keyboard.add_hotkey('ctrl+alt+down', self.on_move_down, suppress=True)
-            keyboard.add_hotkey('ctrl+shift+v', self.toggle_capture_visibility, suppress=True)
-            keyboard.add_hotkey('ctrl+shift+r', self.on_reset_screenshots, suppress=True)
-            keyboard.add_hotkey('ctrl+l', self.on_follow_up, suppress=True)
-            keyboard.add_hotkey('ctrl+shift+f', self.on_focus, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_CAPTURE, self.on_capture, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_PROCESS, self.on_process, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_PROCESS_FAST, self.on_process_fast, suppress=True) # Register fast process hotkey
+            keyboard.add_hotkey(config.HOTKEY_TOGGLE_VISIBILITY, self.on_toggle, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_MOVE_LEFT, self.on_move_left, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_MOVE_RIGHT, self.on_move_right, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_MOVE_UP, self.on_move_up, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_MOVE_DOWN, self.on_move_down, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_TOGGLE_CAPTURE_VISIBILITY, self.toggle_capture_visibility, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_RESET_SCREENSHOTS, self.on_reset_screenshots, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_FOLLOW_UP, self.on_follow_up, suppress=True)
+            keyboard.add_hotkey(config.HOTKEY_FOCUS_OVERLAY, self.on_focus, suppress=True)
             logger.info("'keyboard' hotkeys registered.")
             # Note: 'keyboard' library doesn't require a separate listener thread typically.
             # It hooks into the system event loop.
 
         elif sys.platform == 'darwin' and pynput_keyboard:
             logger.debug("Starting pynput hotkey listener (macOS)...")
-            # Define hotkeys map for pynput
+            # Define hotkeys map for pynput using config values
+            # Note: pynput uses '<modifier>+<key>' format
+            def format_pynput_hotkey(hotkey_str):
+                # Basic replacement for common keys, might need expansion
+                return hotkey_str.replace('enter', '<enter>') \
+                                .replace('left', '<left>') \
+                                .replace('right', '<right>') \
+                                .replace('up', '<up>') \
+                                .replace('down', '<down>')
+
             hotkeys_map = {
-                '<ctrl>+<shift>+h': self.on_capture,
-                '<ctrl>+<shift>+<enter>': self.on_process,
-                '<ctrl>+b': self.on_toggle,
-                '<ctrl>+<alt>+<left>': self.on_move_left,
-                '<ctrl>+<alt>+<right>': self.on_move_right,
-                '<ctrl>+<alt>+<up>': self.on_move_up,
-                '<ctrl>+<alt>+<down>': self.on_move_down,
-                '<ctrl>+<shift>+v': self.toggle_capture_visibility,
-                '<ctrl>+<shift>+r': self.on_reset_screenshots,
-                '<ctrl>+l': self.on_follow_up,
-                '<ctrl>+<shift>+f': self.on_focus
+                format_pynput_hotkey(config.HOTKEY_CAPTURE): self.on_capture,
+                format_pynput_hotkey(config.HOTKEY_PROCESS): self.on_process,
+                format_pynput_hotkey(config.HOTKEY_PROCESS_FAST): self.on_process_fast,
+                format_pynput_hotkey(config.HOTKEY_TOGGLE_VISIBILITY): self.on_toggle,
+                format_pynput_hotkey(config.HOTKEY_MOVE_LEFT): self.on_move_left,
+                format_pynput_hotkey(config.HOTKEY_MOVE_RIGHT): self.on_move_right,
+                format_pynput_hotkey(config.HOTKEY_MOVE_UP): self.on_move_up,
+                format_pynput_hotkey(config.HOTKEY_MOVE_DOWN): self.on_move_down,
+                format_pynput_hotkey(config.HOTKEY_TOGGLE_CAPTURE_VISIBILITY): self.toggle_capture_visibility,
+                format_pynput_hotkey(config.HOTKEY_RESET_SCREENSHOTS): self.on_reset_screenshots,
+                format_pynput_hotkey(config.HOTKEY_FOLLOW_UP): self.on_follow_up,
+                format_pynput_hotkey(config.HOTKEY_FOCUS_OVERLAY): self.on_focus
             }
 
             # Run listener in a separate thread for pynput
@@ -213,39 +226,43 @@ class HotkeyHandler(QObject):
         self.toggle_signal.emit()
 
     def on_process(self):
-        logger.debug("Process hotkey pressed: <ctrl>+<shift>+<enter>")
+        logger.debug(f"Process hotkey pressed: {config.HOTKEY_PROCESS}")
         self.process_signal.emit()
 
+    def on_process_fast(self):
+        logger.debug(f"Process Fast hotkey pressed: {config.HOTKEY_PROCESS_FAST}")
+        self.process_fast_signal.emit() # Emit the new signal
+
     def on_move_left(self):
-        logger.debug("Move left hotkey pressed: <ctrl>+<alt>+<left>")
+        logger.debug(f"Move left hotkey pressed: {config.HOTKEY_MOVE_LEFT}")
         self.move_left_signal.emit()
 
     def on_move_right(self):
-        logger.debug("Move right hotkey pressed: <ctrl>+<alt>+<right>")
+        logger.debug(f"Move right hotkey pressed: {config.HOTKEY_MOVE_RIGHT}")
         self.move_right_signal.emit()
 
     def on_move_up(self):
-        logger.debug("Move up hotkey pressed: <ctrl>+<alt>+<up>")
+        logger.debug(f"Move up hotkey pressed: {config.HOTKEY_MOVE_UP}")
         self.move_up_signal.emit()
 
     def on_move_down(self):
-        logger.debug("Move down hotkey pressed: <ctrl>+<alt>+<down>")
+        logger.debug(f"Move down hotkey pressed: {config.HOTKEY_MOVE_DOWN}")
         self.move_down_signal.emit()
 
     def toggle_capture_visibility(self):
-        logger.debug("Toggle capture visibility hotkey pressed: <ctrl>+<shift>+v")
+        logger.debug(f"Toggle capture visibility hotkey pressed: {config.HOTKEY_TOGGLE_CAPTURE_VISIBILITY}")
         self.toggle_capture_visibility_signal.emit()
 
     def on_reset_screenshots(self):
-        logger.debug("Reset screenshots hotkey pressed: <ctrl>+<shift>+r")
+        logger.debug(f"Reset screenshots hotkey pressed: {config.HOTKEY_RESET_SCREENSHOTS}")
         self.reset_screenshots_signal.emit()
 
     def on_follow_up(self):
-        logger.debug("Follow-up hotkey pressed: <ctrl>+l")
+        logger.debug(f"Follow-up hotkey pressed: {config.HOTKEY_FOLLOW_UP}")
         self.follow_up_signal.emit()
 
     def on_focus(self):
-        logger.debug("Focus overlay hotkey pressed: <ctrl>+<shift>+f")
+        logger.debug(f"Focus overlay hotkey pressed: {config.HOTKEY_FOCUS_OVERLAY}")
         self.focus_signal.emit()
 
 # Screenshot and navigation functions
@@ -253,10 +270,10 @@ def take_screenshot(overlay):
     """Hides overlay and triggers delayed capture."""
     logger.debug("Initiating screenshot capture")
     # Hide overlay first
-    overlay.hide()
+    #overlay.hide()
 
     # Schedule the actual screenshot after a delay to ensure overlay is hidden
-    QTimer.singleShot(SCREENSHOT_DELAY_MS, partial(delayed_capture, overlay))
+    QTimer.singleShot(config.SCREENSHOT_DELAY_MS, partial(delayed_capture, overlay))
 
 def delayed_capture(overlay):
     """Performs the actual screen capture using platform-specific methods."""
@@ -382,15 +399,22 @@ def delayed_capture(overlay):
              logger.debug("Showing overlay after capture attempt.")
              overlay.show()
 
-def process_screenshots(overlay):
-    logger.debug("Processing screenshots")
+def process_screenshots(overlay, fast_mode=False):
+    """Initiates screenshot processing via ApiClient.
+
+    Args:
+        overlay: The overlay window instance.
+        fast_mode: Boolean indicating if fast mode should be used.
+    """
+    logger.debug(f"Processing screenshots (fast_mode={fast_mode})")
     screenshots = QApplication.instance().screenshots
 
     if not screenshots:
-        overlay.update_status("No screenshots to process. Press CTRL+SHIFT+H to capture.")
+        overlay.update_status(f"No screenshots to process. Press {config.HOTKEY_CAPTURE} to capture.")
         return
 
-    overlay.update_status("Processing screenshots...")
+    status_message = "Processing screenshots (Fast Mode)..." if fast_mode else "Processing screenshots..."
+    overlay.update_status(status_message)
 
     # Reset the output area before starting
     overlay.update_output("# Analyzing Problem...\n\n*Processing your screenshots and generating solution...*")
@@ -496,8 +520,10 @@ For example, if nums = [2, 7, 11, 15] and target = 9:
             api_client.output_update_signal.connect(overlay.update_output)
             api_client.status_update_signal.connect(overlay.update_status)
             
+            # *** Add logging here ***
+            logger.debug(f"[main.py] Calling api_client.process_images with fast_mode={fast_mode}")
             # Process the images directly
-            result = api_client.process_images(screenshots)
+            result = api_client.process_images(screenshots, fast_mode=fast_mode)
             
             # We don't need to store last_problem_data in the app instance anymore
             # since we're using static class variables in ApiClient
@@ -512,15 +538,16 @@ For example, if nums = [2, 7, 11, 15] and target = 9:
 def move_overlay(overlay, direction):
     logger.debug(f"Moving overlay: {direction}")
     pos = overlay.pos()
+    step = config.OVERLAY_MOVEMENT_STEP # Use config value
 
     if direction == 'left':
-        overlay.move(pos.x() - MOVEMENT_STEP, pos.y())
+        overlay.move(pos.x() - step, pos.y())
     elif direction == 'right':
-        overlay.move(pos.x() + MOVEMENT_STEP, pos.y())
+        overlay.move(pos.x() + step, pos.y())
     elif direction == 'up':
-        overlay.move(pos.x(), pos.y() - MOVEMENT_STEP)
+        overlay.move(pos.x(), pos.y() - step)
     elif direction == 'down':
-        overlay.move(pos.x(), pos.y() + MOVEMENT_STEP)
+        overlay.move(pos.x(), pos.y() + step)
 
 def reset_screenshots(overlay):
     """Reset/clear all captured screenshots"""
@@ -601,7 +628,8 @@ def main():
     # Connect signals to slots
     hotkey_handler.capture_signal.connect(lambda: take_screenshot(overlay))
     hotkey_handler.toggle_signal.connect(overlay.toggle_visibility)
-    hotkey_handler.process_signal.connect(lambda: process_screenshots(overlay))
+    hotkey_handler.process_signal.connect(lambda: process_screenshots(overlay, fast_mode=False))
+    hotkey_handler.process_fast_signal.connect(lambda: process_screenshots(overlay, fast_mode=True)) # Connect fast signal
     hotkey_handler.move_left_signal.connect(lambda: move_overlay(overlay, 'left'))
     hotkey_handler.move_right_signal.connect(lambda: move_overlay(overlay, 'right'))
     hotkey_handler.move_up_signal.connect(lambda: move_overlay(overlay, 'up'))
@@ -612,17 +640,20 @@ def main():
     hotkey_handler.focus_signal.connect(overlay.bring_to_front)
 
     # Initialize UI
-    overlay.update_status("Ready. Press CTRL+SHIFT+H to capture screen.")
+    overlay.update_status(f"Ready. Press {config.HOTKEY_CAPTURE} to capture screen.")
 
     # Welcome message with instructions
-    welcome_msg = """# Welcome to Acecoder
+    welcome_msg = f"""# Welcome to Acecoder
 
 ## Quick Instructions
-1. Press **Ctrl+Shift+H** to capture a screenshot of the coding problem
-2. Press **Ctrl+Shift+Enter** to process the captured screenshots
-3. Use **Ctrl+Alt+Arrow keys** to move this window around
-4. Press **Ctrl+B** to hide/show this overlay
-5. Press **Ctrl+L** to open the follow-up chat when you need help with the solution
+1. Press **{config.HOTKEY_CAPTURE}** to capture a screenshot of the coding problem
+2. Press **{config.HOTKEY_PROCESS}** to process the captured screenshots (standard analysis)
+3. Press **{config.HOTKEY_PROCESS_FAST}** to process screenshots quickly (skips content detection)
+4. Use **{config.HOTKEY_MOVE_LEFT} / {config.HOTKEY_MOVE_RIGHT} / {config.HOTKEY_MOVE_UP} / {config.HOTKEY_MOVE_DOWN}** to move this window around
+5. Press **{config.HOTKEY_TOGGLE_VISIBILITY}** to hide/show this overlay
+6. Press **{config.HOTKEY_FOLLOW_UP}** to open the follow-up chat when you need help with the solution
+7. Press **{config.HOTKEY_RESET_SCREENSHOTS}** to clear captured screenshots
+8. Press **{config.HOTKEY_TOGGLE_CAPTURE_VISIBILITY}** to toggle window visibility in captures
 
 The assistant will analyze the problem and provide a solution. If you have questions or encounter errors with the solution, use the follow-up feature to get additional help without losing context."""
 
