@@ -10,13 +10,7 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 
 **Note:** This application supports **Windows and macOS**.
 
-<table>
-  <tr>
-    <td width="592">
-      <img src="preview.webp" alt="AceCoder Preview">
-    </td>
-  </tr>
-</table>
+<img src="preview.webp" alt="AceCoder Preview" width="480">
 
 ## Key Features
 
