@@ -10,7 +10,7 @@ This project is licensed under the **GNU General Public License v3.0**. See the 
 
 **Note:** This application supports **Windows and macOS**.
 
-<img src="preview.webp" alt="AceCoder Preview" width="592">
+![AceCoder Preview](preview.webp)
 
 ## Key Features
 
