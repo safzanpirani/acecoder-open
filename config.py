@@ -14,7 +14,7 @@ OPENROUTER_SITE_TITLE = os.environ.get("OPENROUTER_SITE_TITLE", "AceCoder")
 # Ensure the models support multimodal inputs (image and text)
 DEFAULT_MODEL_NAME = "google/gemini-2.5-pro-preview-03-25"        # Main model for standard processing
 DETECTION_MODEL_NAME = "google/gemini-2.0-flash-lite-001" # Model for content detection (needs to be fast)
-FAST_MODEL_NAME = "google/gemini-2.0-flash-001"            # Model for fast processing (skips detection)
+FAST_MODEL_NAME = "google/gemini-2.5-pro-preview-03-25"            # Model for fast processing (skips detection)
 
 # Default content type to assume when using fast mode (skipping detection)
 # Options: "coding", "multiple_choice", "debugging", "system_design", "general"
@@ -26,7 +26,7 @@ DEFAULT_MAX_TOKENS = 8192  # Max tokens for the response
 
 # API Request Settings
 DEFAULT_RETRY_COUNT = 2    # Number of retries for failed API calls
-DEFAULT_TIMEOUT = 60      # Timeout in seconds for API requests
+DEFAULT_TIMEOUT = 120      # Timeout in seconds for API requests
 
 # --- Application Settings ---
 # Logging

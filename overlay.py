@@ -176,6 +176,20 @@ if sys.platform == 'darwin':
 else:
     MACOS_NATIVE_APIS_LOADED = False
 
+# Helper function to shorten model names for display
+def get_short_model_name(full_name):
+    if not full_name:
+        return "N/A"
+    parts = full_name.split('/')
+    if len(parts) > 1:
+        # Take the part after the last /
+        name = parts[-1]
+        # Optionally remove common suffixes like :free or -001 if needed for brevity
+        name = name.split(':')[0]
+        # name = name.replace("-001", "") # Example: remove -001
+        return name
+    return full_name # Return original if format is unexpected
+
 # Signal helper for thread-safe UI updates
 class SignalHelper(QObject):
     update_text_signal = QtSignal(str)
@@ -243,7 +257,8 @@ class OverlayWindow(QMainWindow):
         self.layout = QVBoxLayout(self.central_widget)
 
         # Header with version info and key shortcuts
-        self.header = QLabel("acecoder (beta)")
+        short_default_model = get_short_model_name(config.DEFAULT_MODEL_NAME)
+        self.header = QLabel(f"acecoder (beta) | Model: {short_default_model}")
         self.header.setStyleSheet("color: white; font-weight: bold; font-size: 14px;")
         self.header.setAlignment(Qt.AlignCenter)
 

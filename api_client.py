@@ -17,6 +17,9 @@ import os
 # Local configuration import
 import config
 
+# Import helper function from overlay
+from overlay import get_short_model_name
+
 # Set up logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -160,18 +163,28 @@ class ApiClient(QObject):
             self.status_update_signal.emit(f"Processing {total_images} image(s)...")
             
             current_model = self.model_name # Default model
+            short_detection_model = get_short_model_name(self.detection_model_name)
+            short_fast_model = get_short_model_name(self.fast_model_name)
+            short_default_model = get_short_model_name(self.model_name)
+
             if fast_mode:
                 content_type = config.FAST_MODE_DEFAULT_CONTENT_TYPE
                 current_model = self.fast_model_name
-                self.status_update_signal.emit(f"Fast Mode: Using {current_model} with assumed type '{content_type}'")
+                self.status_update_signal.emit(f"Fast Mode: Analyzing ({short_fast_model}) | Type: '{content_type}'")
                 logger.info(f"Fast Mode enabled. Skipping detection, using model: {current_model}, type: {content_type}")
             else:
-                content_type = self._detect_content_type(encoded_images)
-                self.status_update_signal.emit(f"Detected content type: {content_type}")
-                logger.info(f"Using prompt type: {content_type} for analysis")
-            
+                self.status_update_signal.emit(f"Detecting content ({short_detection_model})...")
+                detected_content_type = self._detect_content_type(encoded_images)
+                self.status_update_signal.emit(f"Detected: {detected_content_type} | Analyzing ({short_default_model})...")
+                logger.info(f"Using prompt type: {detected_content_type} for analysis with {current_model}")
+
+                # --- Removing Temporary Debugging Code --- 
+                # Set the content_type for the prompt based on detection result
+                content_type = detected_content_type 
+                # logger.warning(f"[TEMP DEBUG] Overriding content_type to '{content_type}' for prompt generation.")
+                # ----------------------------------------
+
             prompt = self._create_smart_prompt(total_images, content_type)
-            self.status_update_signal.emit(f"Analyzing {content_type} problem with {current_model}...")
 
             # Prepare messages for OpenAI SDK multimodal format
             messages = [
@@ -229,7 +242,9 @@ class ApiClient(QObject):
                     
                     stream_end = time.time()
                     total_time = stream_end - self.start_time
-                    self.status_update_signal.emit(f"Analysis complete in {total_time:.2f}s")
+                    # Final status indicates completion and includes model used
+                    final_model_short = short_fast_model if fast_mode else short_default_model
+                    self.status_update_signal.emit(f"Analysis complete ({final_model_short}) in {total_time:.2f}s")
                     
                 else: # Handle non-streaming response
                     response = self.client.chat.completions.create(
@@ -256,7 +271,9 @@ class ApiClient(QObject):
                         ApiClient._last_raw_text = solution_content
                         
                         total_time = request_end - self.start_time
-                        self.status_update_signal.emit(f"Analysis complete in {total_time:.2f}s")
+                        # Final status indicates completion and includes model used
+                        final_model_short = short_fast_model if fast_mode else short_default_model
+                        self.status_update_signal.emit(f"Analysis complete ({final_model_short}) in {total_time:.2f}s")
                     else:
                         logger.error("OpenRouter API request error: No response choices received.")
                         self.status_update_signal.emit("Error: No response choices received.")
@@ -581,6 +598,10 @@ UNIVERSAL GUIDELINES:
 
             try:
                 logger.debug(f"Sending follow-up request to OpenRouter model: {self.model_name}") # Use default model for follow-up
+                # Update status for follow-up
+                short_followup_model = get_short_model_name(self.model_name)
+                self.status_update_signal.emit(f"Processing follow-up ({short_followup_model})...")
+
                 stream = self.client.chat.completions.create(
                     model=self.model_name, # Follow-ups use the standard model
                     messages=messages,
@@ -601,7 +622,8 @@ UNIVERSAL GUIDELINES:
                         self.output_update_signal.emit(followup_content + solution_content)
                 
                 total_time = time.time() - self.start_time
-                self.status_update_signal.emit(f"Follow-up complete in {total_time:.2f}s")
+                # Final status indicates completion and includes model used
+                self.status_update_signal.emit(f"Follow-up complete ({short_followup_model}) in {total_time:.2f}s")
             
             except Exception as e:
                 logger.error(f"OpenRouter Follow-up error: {str(e)}")
